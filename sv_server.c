@@ -7,6 +7,8 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
+#include <time.h>
 
 
 struct sinhvien {
@@ -15,6 +17,22 @@ struct sinhvien {
   char ngaysinh[16];
   float diem;
 };
+
+static int recv_all(int fd, void *buf, size_t len) {
+    size_t total = 0;
+    while (total < len) {
+        ssize_t got = recv(fd, (char *)buf + total, len - total, 0);
+        if (got == 0) {
+            return 0;
+        }
+        if (got < 0) {
+            return -1;
+        }
+        total += (size_t)got;
+    }
+    return 1;
+}
+
 int main(int argc, char *argv[]) {
 
     int listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -29,12 +47,12 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // set up client address structure
-    struct sockaddr_in client_addr;
-    memset(&client_addr, 0, sizeof(client_addr));
-    client_addr.sin_family = AF_INET;
-    client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    client_addr.sin_port = htons(atoi(argv[1]));
+    // set up local bind address
+    struct sockaddr_in bind_addr;
+    memset(&bind_addr, 0, sizeof(bind_addr));
+    bind_addr.sin_family = AF_INET;
+    bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    bind_addr.sin_port = htons(atoi(argv[1]));
 
     // set up SO_REUSEADDR to allow reuse of the port immediately after the server is closed
     int opt = 1; 
@@ -44,43 +62,94 @@ int main(int argc, char *argv[]) {
     }
 
     // bind to the specified port
-    if (bind(listener, (struct sockaddr *)&client_addr, sizeof(client_addr))) {
+    if (bind(listener, (struct sockaddr *)&bind_addr, sizeof(bind_addr))) {
         perror("bind() failed");
         exit(EXIT_FAILURE);
     }
 
     // listen for incoming connections
-    listen(listener, 5);
-
-    int client = accept(listener, NULL, NULL);
-    if (client < 0) {
-        perror("accept() failed");
+    if (listen(listener, 5) < 0) {
+        perror("listen() failed");
         exit(EXIT_FAILURE);
     }
 
-    // open log file for writing
-    FILE *log_fp = fopen(argv[2], "w");
-    if (log_fp == NULL) {
-        perror("fopen() failed");
-        exit(EXIT_FAILURE);
-    }
+    // reap child processes automatically
+    signal(SIGCHLD, SIG_IGN);
 
-    // receive data from client and write to log file (ip, date time sent, mssv, hoten, ngaysinh, diem)
-    struct sinhvien sv;
+    // accept loop - fork a child for each client
     while (1) {
-        int bytes_received = recv(client, &sv, sizeof(sv), 0);
-        if (bytes_received <= 0) {
+        struct sockaddr_in peer_addr;
+        socklen_t peer_len = sizeof(peer_addr);
+        int client = accept(listener, (struct sockaddr *)&peer_addr, &peer_len);
+        if (client < 0) {
+            if (errno == EINTR) continue;
+            perror("accept() failed");
             break;
         }
-        char client_ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
-        fprintf(log_fp, "Client IP: %s, MSSV: %d, Hoten: %s, Ngay Sinh: %s, Diem: %.2f\n", client_ip, sv.mssv, sv.hoten, sv.ngaysinh, sv.diem); 
-        fflush(log_fp);
+
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork() failed");
+            close(client);
+            continue;
+        }
+
+        if (pid == 0) {
+            // child
+            close(listener);
+
+            // open log file in append mode so multiple children don't truncate
+            FILE *log_fp = fopen(argv[2], "a");
+            if (log_fp == NULL) {
+                perror("fopen() failed in child");
+                close(client);
+                exit(EXIT_FAILURE);
+            }
+
+            struct sinhvien sv;
+            while (1) {
+                int rc = recv_all(client, &sv, sizeof(sv));
+                if (rc == 0) {
+                    break;
+                }
+                if (rc < 0) {
+                    perror("recv() failed");
+                    break;
+                }
+
+                char client_ip[INET_ADDRSTRLEN];
+                if (inet_ntop(AF_INET, &peer_addr.sin_addr, client_ip, sizeof(client_ip)) == NULL) {
+                    strncpy(client_ip, "unknown", sizeof(client_ip));
+                    client_ip[sizeof(client_ip) - 1] = '\0';
+                }
+
+                char timestamp[32];
+                time_t now = time(NULL);
+                struct tm *tm_info = localtime(&now);
+                if (tm_info != NULL) {
+                    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+                } else {
+                    strncpy(timestamp, "unknown-time", sizeof(timestamp));
+                    timestamp[sizeof(timestamp) - 1] = '\0';
+                }
+
+                fprintf(log_fp, "%s %s %d %s %s %.2f\n",
+                        client_ip, timestamp, sv.mssv, sv.hoten, sv.ngaysinh, sv.diem);
+                printf("Client IP: %s, Time: %s, MSSV: %d, Hoten: %s, Ngay Sinh: %s, Diem: %.2f\n",
+                       client_ip, timestamp, sv.mssv, sv.hoten, sv.ngaysinh, sv.diem);
+                fflush(log_fp);
+            }
+
+            fclose(log_fp);
+            close(client);
+            exit(0);
+        } else {
+            // parent
+            close(client);
+            continue;
+        }
     }
 
-    fclose(log_fp);
-    close(client);
     close(listener);
-
     return 0;
 }

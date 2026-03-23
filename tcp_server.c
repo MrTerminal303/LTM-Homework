@@ -8,6 +8,18 @@
 #include <unistd.h>
 #include <errno.h>
 
+static int send_all(int fd, const char *buf, size_t len) {
+    size_t sent_total = 0;
+    while (sent_total < len) {
+        ssize_t sent = send(fd, buf + sent_total, len - sent_total, 0);
+        if (sent <= 0) {
+            return -1;
+        }
+        sent_total += (size_t)sent;
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     int listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listener < 0) {
@@ -24,12 +36,12 @@ int main(int argc, char *argv[]) {
     char *hello_file = argv[2];
     char *save_path = argv[3];
 
-    // set up client address structure
-    struct sockaddr_in client_addr;
-    memset(&client_addr, 0, sizeof(client_addr));
-    client_addr.sin_family = AF_INET;
-    client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    client_addr.sin_port = htons(port_number);
+    // set up local bind address
+    struct sockaddr_in bind_addr;
+    memset(&bind_addr, 0, sizeof(bind_addr));
+    bind_addr.sin_family = AF_INET;
+    bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    bind_addr.sin_port = htons(port_number);
 
     // set up SO_REUSEADDR to allow reuse of the port immediately after the server is closed
     int opt = 1;
@@ -39,13 +51,16 @@ int main(int argc, char *argv[]) {
     }
 
     // bind to the specified port
-    if (bind(listener, (struct sockaddr *)&client_addr, sizeof(client_addr))) {
+    if (bind(listener, (struct sockaddr *)&bind_addr, sizeof(bind_addr))) {
         perror("bind() failed");
         exit(EXIT_FAILURE);
     }
 
     // listen for incoming connections
-    listen(listener, 5);
+    if (listen(listener, 5) < 0) {
+        perror("listen() failed");
+        exit(EXIT_FAILURE);
+    }
 
     int client = accept(listener, NULL, NULL);
     if (client < 0) {
@@ -67,7 +82,12 @@ int main(int argc, char *argv[]) {
     fclose(hello_fp);
 
     // send hello string to client
-    send(client, hello_buf, strlen(hello_buf), 0);
+    if (send_all(client, hello_buf, strlen(hello_buf)) < 0) {
+        perror("send() failed");
+        close(client);
+        close(listener);
+        exit(EXIT_FAILURE);
+    }
 
     // receive data from client and save to file
     char recv_buf[256];
@@ -78,12 +98,13 @@ int main(int argc, char *argv[]) {
     }
 
     while (1) {
-        int len = recv(client, recv_buf, sizeof(recv_buf), 0);
+        ssize_t len = recv(client, recv_buf, sizeof(recv_buf) - 1, 0);
         if (len <= 0) {
             break;
         }
         recv_buf[len] = 0;
-        fprintf(save_fp, "%s", recv_buf);
+        fputs(recv_buf, save_fp);
+        printf("Received: %s", recv_buf);
     }
     fclose(save_fp);
 
