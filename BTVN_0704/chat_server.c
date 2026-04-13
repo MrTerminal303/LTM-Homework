@@ -17,7 +17,7 @@ typedef struct {
     int fd;
     char id[64];
     char name[128];
-    int registered; /* 0 = not yet registered, 1 = registered */
+    int registered;
 } client_t;
 
 void removeClient(client_t *clients, int *nClients, int i) {
@@ -43,24 +43,30 @@ static void make_timestamp(char *buf, size_t bufsz) {
 }
 
 int main() {
+
+    // Create listening socket
     int listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listener == -1) {
         perror("socket() failed");
         return 1;
     }
 
-    if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int))) {
+    // Allow reuse of address
+    int opt = 1;
+    if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         perror("setsockopt() failed");
         close(listener);
         return 1;
     }
 
+    // Bind to port 8000 on all interfaces
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(8080);
+    addr.sin_port = htons(8000);
 
+    // Bind and listen
     if (bind(listener, (struct sockaddr *)&addr, sizeof(addr))) {
         perror("bind() failed");
         close(listener);
@@ -73,15 +79,15 @@ int main() {
         return 1;
     }
 
-    printf("Server listening on port 8080\n");
-
     client_t clients[MAX_CLIENTS];
     int nClients = 0;
 
     fd_set fdread;
     char buf[BUFSIZE];
 
+    // Main loop
     while (1) {
+        // Prepare fd_set
         FD_ZERO(&fdread);
         FD_SET(listener, &fdread);
         int maxfd = listener;
@@ -90,18 +96,21 @@ int main() {
             if (clients[i].fd > maxfd) maxfd = clients[i].fd;
         }
 
+        // Wait for activity
         int ret = select(maxfd + 1, &fdread, NULL, NULL, NULL);
         if (ret < 0) {
             perror("select() failed");
             break;
         }
 
+        // Check for new connection
         if (FD_ISSET(listener, &fdread)) {
             int clientfd = accept(listener, NULL, NULL);
             if (clientfd < 0) {
                 perror("accept() failed");
             } else {
                 if (nClients < MAX_CLIENTS) {
+                    // Add new client
                     clients[nClients].fd = clientfd;
                     clients[nClients].registered = 0;
                     clients[nClients].id[0] = '\0';
@@ -111,6 +120,7 @@ int main() {
                     const char *welcome = "Welcome to chat server.\nPlease register using: client_id:client_name\n";
                     send(clientfd, welcome, strlen(welcome), 0);
                 } else {
+                    // Server full
                     const char *full = "Server full. Try later.\n";
                     send(clientfd, full, strlen(full), 0);
                     close(clientfd);
@@ -118,7 +128,10 @@ int main() {
             }
         }
 
+        // Check for client messages
         for (int i = 0; i < nClients; i++) {
+
+            // Check if this client's socket has data
             int fd = clients[i].fd;
             if (!FD_ISSET(fd, &fdread)) continue;
             ret = recv(fd, buf, sizeof(buf) - 1, 0);
@@ -132,7 +145,8 @@ int main() {
             // strip CR/LF
             char *p = strchr(buf, '\n'); if (p) *p = '\0';
             p = strchr(buf, '\r'); if (p) *p = '\0';
-
+            
+            // If not registered, expect registration message
             if (!clients[i].registered) {
                 // expect: client_id:client_name
                 char copy[BUFSIZE];
@@ -144,6 +158,8 @@ int main() {
                     send(fd, msg, strlen(msg), 0);
                     continue;
                 }
+
+                // Split into id and name
                 *colon = '\0';
                 char *idpart = copy;
                 char *namepart = colon + 1;
@@ -154,11 +170,15 @@ int main() {
                     send(fd, msg, strlen(msg), 0);
                     continue;
                 }
+
+                // Save registration info
                 strncpy(clients[i].id, idpart, sizeof(clients[i].id) - 1);
                 clients[i].id[sizeof(clients[i].id) - 1] = '\0';
                 strncpy(clients[i].name, namepart, sizeof(clients[i].name) - 1);
                 clients[i].name[sizeof(clients[i].name) - 1] = '\0';
                 clients[i].registered = 1;
+
+                // Send acknowledgment
                 char ack[256];
                 snprintf(ack, sizeof(ack), "Registered as %s:%s\n", clients[i].id, clients[i].name);
                 send(fd, ack, strlen(ack), 0);
@@ -166,14 +186,15 @@ int main() {
                 continue;
             }
 
-            // Broadcast message to other registered clients, prefix with optional timestamp
+            // Prepare broadcast message to other clients
             char out[BUFSIZE * 2];
             char ts[64];
             make_timestamp(ts, sizeof(ts));
             if (ts[0]) snprintf(out, sizeof(out), "%s %s: %s\n", ts, clients[i].id, buf);
             else snprintf(out, sizeof(out), "%s: %s\n", clients[i].id, buf);
+            printf("%s %s: %s\n", ts, clients[i].id, buf);
 
-            printf("From %s(fd=%d): %s\n", clients[i].id, fd, buf);
+            // Send to all other registered clients
             for (int j = 0; j < nClients; j++) {
                 if (j == i) continue;
                 if (!clients[j].registered) continue;

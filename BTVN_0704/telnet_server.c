@@ -58,7 +58,8 @@ int main() {
         return 1;
     }
     
-    if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int))) {
+    int opt = 1;
+    if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
         perror("setsockopt() failed");
         close(listener);
         return 1;
@@ -67,7 +68,7 @@ int main() {
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(8080);
+    addr.sin_port = htons(8000);
     
     if (bind(listener, (struct sockaddr *)&addr, sizeof(addr))) {
         perror("bind() failed");
@@ -80,9 +81,6 @@ int main() {
         close(listener);
         return 1;
     }
-    
-    // Server is now listening for incoming connections
-    printf("Server is listening on port 8080...\n");
 
     struct client_info { int fd; int stage; char user[64]; } clients[MAX_CLIENTS];
     int nClients = 0;
@@ -120,12 +118,12 @@ int main() {
                 clients[nClients].user[0] = '\0';
                 nClients++;
                 printf("New client connected: %d\n", client);
-                char *msg = "Welcome\n";
+                const char *msg = "Welcome\n";
                 send(client, msg, strlen(msg), 0);
                 send(client, "Username: ", strlen("Username: "), 0);
             } else {
                 printf("Too many connections\n");
-                char *msg = "Sorry. Out of slots.\n";
+                const char *msg = "Sorry. Out of slots.\n";
                 send(client, msg, strlen(msg), 0);
                 close(client);
             }
@@ -199,7 +197,7 @@ int main() {
                         }
                         fclose(fo);
                     } else {
-                        char *errmsg = "(no output)\n";
+                        const char *errmsg = "(no output)\n";
                         send(cfd, errmsg, strlen(errmsg), 0);
                     }
                     // Prompt again
