@@ -1,0 +1,30 @@
+=== user=admin fd=4 time=2026-04-20 18:07:27 cmd="cat users.txt" ===
+admin admin
+guest nopass
+=== user=admin fd=4 time=2026-04-20 18:07:36 cmd="ls -a" ===
+.
+..
+chat_server
+chat_server.c
+out_4.tmp
+out.txt
+telnet_server
+telnet_server.c
+users.txt
+
+=== user=admin fd=4 time=2026-04-20 18:18:20 cmd="ls -a" ===
+.
+..
+chat_server
+chat_server.c
+out_4.tmp
+out.txt
+telnet_server
+telnet_server.c
+users.txt
+
+=== user=guest fd=5 time=2026-04-20 18:18:35 cmd="cat users.txt" ===
+admin admin
+guest nopass
+=== user=admin fd=4 time=2026-04-20 18:20:02 cmd="grep guest users.txt" ===
+guest nopass
